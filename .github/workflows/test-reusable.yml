@@ -1,0 +1,130 @@
+# Reusable Test workflow.
+#
+# Called from each consumer repo's tiny .github/workflows/test.yml
+# wrapper. Single source of truth: change this file in release-manager,
+# every consumer's next push picks up the change.
+#
+# Behavior contract:
+#   - install workspace deps (npm install)
+#   - build any --if-present builds
+#   - run scripts/test.sh if present, else `npm test`, else no-op pass
+#   - test-result is the workflow's conclusion (gates notify-release)
+
+name: Test (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      # Optional environment hints for repos that need them in scripts/test.sh
+      # (sdk uses CHANNEL to pick the live API target, for example).
+      channel:
+        type: string
+        required: false
+        default: ''
+      suite:
+        type: string
+        required: false
+        default: 'smoke'
+    secrets:
+      # Static, read-only on @symbo.ls. Set per consumer repo.
+      NPM_TOKEN:
+        required: false
+      # Static, Classic PAT read:packages only on @symbo-ls. Per consumer.
+      GH_PACKAGES_TOKEN:
+        required: false
+      # Optional: only sdk uses these (live API smoke tests). Most repos
+      # leave them unset and the test step is a no-op for that branch.
+      INFISICAL_CLIENT_ID:
+        required: false
+      INFISICAL_CLIENT_SECRET:
+        required: false
+      INFISICAL_PROJECT_ID:
+        required: false
+      INFISICAL_DOMAIN:
+        required: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Cache ~/.npm — survives unpublished tarballs (we've had one).
+      # Keyed by every package.json in the tree.
+      - name: Cache ~/.npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Configure dual-registry auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          {
+            if [ -n "$NPM_TOKEN" ]; then
+              echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN"
+              echo "always-auth=true"
+            else
+              echo "::warning::NPM_TOKEN not set — install of restricted @symbo.ls/* packages will 404."
+            fi
+            if [ -n "$GH_TOKEN" ]; then
+              echo "@symbo-ls:registry=https://npm.pkg.github.com"
+              echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
+            fi
+          } >> "$NPMRC"
+
+      - name: Install
+        env:
+          # Aliases for repos with project-local .npmrc using these names.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: npm install --no-audit --ignore-scripts
+
+      # Some workspace packages ship dist-only and need explicit build
+      # because --ignore-scripts above suppressed prepare hooks.
+      - name: Build workspace packages
+        run: npm run build --workspaces --if-present 2>&1 | tail -100 || true
+
+      - name: Test
+        env:
+          # Pass through Infisical creds for repos that need live API
+          # smoke tests (sdk). Empty when not set; scripts/test.sh
+          # gracefully skips Infisical when missing.
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_DOMAIN: ${{ secrets.INFISICAL_DOMAIN }}
+          # Channel routing: caller passes inputs.channel; if empty,
+          # default to current branch with main → test alias.
+          CHANNEL: ${{ inputs.channel != '' && inputs.channel || (github.ref_name == 'main' && 'test' || github.ref_name) }}
+          SUITE: ${{ inputs.suite }}
+        run: |
+          if [ -f "scripts/test.sh" ]; then
+            bash scripts/test.sh
+          elif jq -e '.scripts.test' package.json > /dev/null; then
+            npm test
+          else
+            echo "No tests configured — install-only smoke test passed."
+          fi

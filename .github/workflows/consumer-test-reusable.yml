@@ -1,0 +1,97 @@
+# Reusable consumer-test workflow. Triggered by manager's
+# repository_dispatch:[upstream-bumped] in each affected consumer.
+#
+# Runs the consumer's own test suite against the just-published
+# bumped versions. Result lives in the consumer's Actions tab.
+
+name: Consumer test (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: false
+      GH_PACKAGES_TOKEN:
+        required: false
+      INFISICAL_CLIENT_ID:
+        required: false
+      INFISICAL_CLIENT_SECRET:
+        required: false
+      INFISICAL_PROJECT_ID:
+        required: false
+      INFISICAL_DOMAIN:
+        required: false
+
+jobs:
+  consumer-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Echo dispatch payload
+        run: |
+          echo "Source repo:    ${{ github.event.client_payload.source_repo }}"
+          echo "Source SHA:     ${{ github.event.client_payload.source_sha }}"
+          echo "Bumped pkgs:    ${{ github.event.client_payload.bumped_packages }}"
+          echo "Bumped vers:    ${{ github.event.client_payload.bumped_versions }}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache ~/.npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Configure dual-registry auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          {
+            [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
+            [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
+          } >> "$NPMRC"
+
+      - name: Install (pulls newly published upstream versions)
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: npm install --no-audit --ignore-scripts
+
+      - name: Build workspace packages
+        run: npm run build --workspaces --if-present 2>&1 | tail -100 || true
+
+      - name: Run tests
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_DOMAIN: ${{ secrets.INFISICAL_DOMAIN }}
+          CHANNEL: ${{ github.ref_name == 'main' && 'test' || github.ref_name }}
+        run: |
+          if [ -f "scripts/test.sh" ]; then
+            bash scripts/test.sh
+          elif jq -e '.scripts.test' package.json > /dev/null; then
+            npm test
+          else
+            echo "No tests configured."
+          fi

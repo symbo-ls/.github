@@ -1,0 +1,106 @@
+# Reusable deploy workflow. Manager dispatches this on consumer repos
+# that have cloud surfaces (server, workspace).
+#
+# Each consumer plugs its actual cloud-push logic into a script at
+# scripts/deploy-from-release-manager.sh (or scripts/deploy.sh as a
+# fallback). This reusable workflow handles the install + auth
+# scaffolding identically across all consumers.
+
+name: Deploy from release-manager (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release tag (e.g. 3.14.6 — without the v prefix)'
+        required: true
+        type: string
+      source_repo:
+        description: 'Consumer repo whose push triggered this release'
+        required: false
+        type: string
+        default: 'release-manager'
+      target_env:
+        description: 'Channel to deploy against (test/staging/production)'
+        required: false
+        type: string
+        default: 'test'
+    secrets:
+      NPM_TOKEN:
+        required: false
+      GH_PACKAGES_TOKEN:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log dispatch source
+        run: |
+          echo "Deploying ${{ github.repository }} at v${{ inputs.version }}"
+          echo "Triggered by release of: ${{ inputs.source_repo }}"
+          echo "Target env: ${{ inputs.target_env }}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: 'v${{ inputs.version }}'
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            **/node_modules
+          key: bun-${{ runner.os }}-${{ inputs.version }}-${{ hashFiles('**/package.json', 'bun.lock', 'package-lock.json') }}
+          restore-keys: |
+            bun-${{ runner.os }}-${{ inputs.version }}-
+            bun-${{ runner.os }}-
+
+      - name: Configure dual-registry auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          {
+            [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
+            [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
+          } >> "$NPMRC"
+
+      - name: Install
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: bun install --no-save
+
+      - name: Build and deploy
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          TARGET_ENV: ${{ inputs.target_env }}
+          NODE_ENV: ${{ inputs.target_env }}
+        run: |
+          if [ -x "./scripts/deploy-from-release-manager.sh" ]; then
+            ./scripts/deploy-from-release-manager.sh
+          elif [ -x "./scripts/deploy.sh" ]; then
+            ./scripts/deploy.sh
+          else
+            echo "::warning::No deploy script — set up scripts/deploy-from-release-manager.sh"
+            echo "::notice::Skipping deploy. release-manager dispatched at v${VERSION} from ${SOURCE_REPO}."
+          fi
