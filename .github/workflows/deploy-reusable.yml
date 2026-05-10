@@ -44,35 +44,40 @@ jobs:
           echo "Triggered by release of: ${{ inputs.source_repo }}"
           echo "Target env: ${{ inputs.target_env }}"
 
-      # Try to checkout the version tag first. If it doesn't exist on
-      # this consumer (e.g. older runs that didn't tag), fall back to
-      # main with a warning. EXCEPT for staging/production: those must
-      # deploy a specific known version, so a missing tag is a hard fail.
-      - name: Try to checkout v${{ inputs.version }}
-        id: checkout_tag
-        continue-on-error: true
+      # Single checkout (full history so all tags are present), then
+      # runtime decision: prefer the version tag; fall back to main HEAD
+      # for test env; hard-fail for staging/production. This avoids
+      # actions/checkout's continue-on-error leaving a partial state
+      # behind that breaks the fallback.
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: 'v${{ inputs.version }}'
           fetch-depth: 0
 
+      - name: Resolve checkout ref (tag if exists, else main)
+        id: resolve_ref
+        run: |
+          TAG="v${{ inputs.version }}"
+          if git rev-parse --verify --quiet "refs/tags/$TAG" > /dev/null; then
+            git checkout "$TAG"
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploying ${{ github.repository }}@$TAG"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Fail on missing tag for staging/production
-        if: steps.checkout_tag.outcome != 'success' && (inputs.target_env == 'staging' || inputs.target_env == 'production')
+        if: steps.resolve_ref.outputs.tag_exists != 'true' && (inputs.target_env == 'staging' || inputs.target_env == 'production')
         run: |
           echo "::error::Tag v${{ inputs.version }} does not exist on ${{ github.repository }}."
           echo "::error::Refusing to fall back to main HEAD for target_env=${{ inputs.target_env }} — that would deploy whatever's on main, not the requested version."
           echo "::error::Either push the tag manually, run the auto-publish flow first to create it, or pick a different version."
           exit 1
 
-      - name: Fallback to main (test env only)
-        if: steps.checkout_tag.outcome != 'success' && inputs.target_env != 'staging' && inputs.target_env != 'production'
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Warn if fallback used
-        if: steps.checkout_tag.outcome != 'success' && inputs.target_env != 'staging' && inputs.target_env != 'production'
+      - name: Warn if falling back to main (test env)
+        if: steps.resolve_ref.outputs.tag_exists != 'true'
         run: echo "::warning::Tag v${{ inputs.version }} not found on ${{ github.repository }}; deploying from main HEAD (target_env=${{ inputs.target_env }})."
 
       - uses: actions/setup-node@v4
@@ -113,7 +118,15 @@ jobs:
           NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-        run: bun install --no-save
+        run: |
+          # Match test-reusable.yml: npm install with package-lock.json
+          # uses lock-pinned tarball URLs and skips scope-metadata lookups
+          # that bun's resolver hits (and 404s on restricted @symbo.ls/*).
+          if [ -f package-lock.json ]; then
+            npm install --no-audit --ignore-scripts
+          else
+            bun install --no-save
+          fi
 
       - name: Build and deploy
         env:
