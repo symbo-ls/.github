@@ -46,7 +46,8 @@ jobs:
 
       # Try to checkout the version tag first. If it doesn't exist on
       # this consumer (e.g. older runs that didn't tag), fall back to
-      # main with a warning.
+      # main with a warning. EXCEPT for staging/production: those must
+      # deploy a specific known version, so a missing tag is a hard fail.
       - name: Try to checkout v${{ inputs.version }}
         id: checkout_tag
         continue-on-error: true
@@ -55,16 +56,24 @@ jobs:
           ref: 'v${{ inputs.version }}'
           fetch-depth: 0
 
-      - name: Fallback to main if tag missing
-        if: steps.checkout_tag.outcome != 'success'
+      - name: Fail on missing tag for staging/production
+        if: steps.checkout_tag.outcome != 'success' && (inputs.target_env == 'staging' || inputs.target_env == 'production')
+        run: |
+          echo "::error::Tag v${{ inputs.version }} does not exist on ${{ github.repository }}."
+          echo "::error::Refusing to fall back to main HEAD for target_env=${{ inputs.target_env }} — that would deploy whatever's on main, not the requested version."
+          echo "::error::Either push the tag manually, run the auto-publish flow first to create it, or pick a different version."
+          exit 1
+
+      - name: Fallback to main (test env only)
+        if: steps.checkout_tag.outcome != 'success' && inputs.target_env != 'staging' && inputs.target_env != 'production'
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
       - name: Warn if fallback used
-        if: steps.checkout_tag.outcome != 'success'
-        run: echo "::warning::Tag v${{ inputs.version }} not found on ${{ github.repository }}; deploying from main HEAD instead. Future runs will have tags via push-submodule-bumps.mjs."
+        if: steps.checkout_tag.outcome != 'success' && inputs.target_env != 'staging' && inputs.target_env != 'production'
+        run: echo "::warning::Tag v${{ inputs.version }} not found on ${{ github.repository }}; deploying from main HEAD (target_env=${{ inputs.target_env }})."
 
       - uses: actions/setup-node@v4
         with:
