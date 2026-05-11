@@ -83,7 +83,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          # NO `registry-url` here. setup-node@v4 with registry-url writes
+          # an .npmrc that includes `_authToken=${NODE_AUTH_TOKEN}` — an
+          # env-var template that npm expands at install time. We don't
+          # set NODE_AUTH_TOKEN, so the template stays literal/empty, the
+          # subsequent `Configure dual-registry auth` step appends its
+          # OWN _authToken line, and bun's parser uses the FIRST one →
+          # empty auth → 404 on every restricted @symbo.ls/* package.
+          # The Configure step writes a complete .npmrc on its own. Trust it.
 
       - uses: oven-sh/setup-bun@v2
         with:
