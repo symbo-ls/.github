@@ -167,6 +167,18 @@ jobs:
           SOURCE_REPO: ${{ inputs.source_repo }}
           TARGET_ENV: ${{ inputs.target_env }}
           NODE_ENV: ${{ inputs.target_env }}
+          # wrangler v4 (and v3 since the deprecation cycle) wants
+          # CLOUDFLARE_API_TOKEN. The legacy CLOUDFLARE_EMAIL +
+          # CLOUDFLARE_API_KEY pair still works for some endpoints but
+          # not for Workers deploy in non-interactive mode. Pass the
+          # Workers token through here so per-worker `wrangler deploy`
+          # calls authenticate without prompting.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Legacy pair kept for back-compat with any workflow that
+          # still consults them — wrangler prefers API_TOKEN when both
+          # are set.
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
         run: |
           if [ -x "./scripts/deploy-from-release-manager.sh" ]; then
             ./scripts/deploy-from-release-manager.sh
