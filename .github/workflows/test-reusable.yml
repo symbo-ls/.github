@@ -5,10 +5,15 @@
 # every consumer's next push picks up the change.
 #
 # Behavior contract:
-#   - install workspace deps (npm install)
-#   - build any --if-present builds
-#   - run scripts/test.sh if present, else `npm test`, else no-op pass
+#   - install workspace deps (bun install)
+#   - build any --if-present builds (bun run build --workspaces)
+#   - run scripts/test.sh if present, else `bun test`, else no-op pass
 #   - test-result is the workflow's conclusion (gates notify-release)
+#
+# Why bun: org-wide migration away from npm. Bun installs an order of
+# magnitude faster, honors workspaces natively, and matches the runtime
+# consumer repos already use for `bun run build`. Server still runs npm
+# (binary deps); every other repo standardizes on bun via this workflow.
 
 name: Test (reusable)
 
@@ -63,15 +68,18 @@ jobs:
         with:
           node-version: 20
 
-      # Cache ~/.npm — survives unpublished tarballs (we've had one).
-      # Keyed by every package.json in the tree.
-      - name: Cache ~/.npm
+      # Cache bun's global install cache + repo node_modules. Bun keys
+      # its store by package@version, so a cold cache after a release
+      # only re-downloads the new tarballs.
+      - name: Cache bun + node_modules
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            npm-${{ runner.os }}-
+            bun-${{ runner.os }}-
 
       - name: Configure dual-registry auth
         # Trim trailing whitespace from tokens before writing .npmrc.
@@ -86,10 +94,10 @@ jobs:
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
           GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
-          # Write to both the user-config path (npm reads this) AND the
-          # workspace-root .npmrc (bun reads from cwd up; doesn't honor
-          # NPM_CONFIG_USERCONFIG). See deploy-reusable for the full
-          # diagnosis.
+          # Write to both the user-config path AND the workspace-root
+          # .npmrc — bun reads from cwd upward and does NOT honor
+          # NPM_CONFIG_USERCONFIG (npm-only env var). See
+          # deploy-reusable for the full diagnosis.
           write_npmrc() {
             local target="$1"
             {
@@ -117,12 +125,20 @@ jobs:
           NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-        run: npm install --no-audit --ignore-scripts
+        # `bun install` honors `workspaces` in package.json natively —
+        # no `--workspaces` flag like npm. `--ignore-scripts` suppresses
+        # postinstall/prepare hooks so dist-only packages don't try to
+        # build before their devDeps are linked; we run them explicitly
+        # in the next step.
+        run: bun install --ignore-scripts
 
-      # Some workspace packages ship dist-only and need explicit build
-      # because --ignore-scripts above suppressed prepare hooks.
+      # Some workspace packages ship dist-only and need an explicit
+      # build because --ignore-scripts above suppressed prepare hooks.
+      # `bun run --filter '*' build` runs the `build` script in every
+      # workspace package that declares one (matches the npm
+      # `--workspaces --if-present` semantics).
       - name: Build workspace packages
-        run: npm run build --workspaces --if-present 2>&1 | tail -100 || true
+        run: bun run --filter '*' build 2>&1 | tail -100 || true
 
       - name: Test
         env:
@@ -141,7 +157,7 @@ jobs:
           if [ -f "scripts/test.sh" ]; then
             bash scripts/test.sh
           elif jq -e '.scripts.test' package.json > /dev/null; then
-            npm test
+            bun run test
           else
             echo "No tests configured — install-only smoke test passed."
           fi

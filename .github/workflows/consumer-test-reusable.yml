@@ -3,6 +3,10 @@
 #
 # Runs the consumer's own test suite against the just-published
 # bumped versions. Result lives in the consumer's Actions tab.
+#
+# Standardized on bun in line with the org-wide migration. Server is
+# the only repo that still routes through npm (see its package-lock.json
+# branch in deploy-reusable.yml); consumer tests run everywhere else.
 
 name: Consumer test (reusable)
 
@@ -49,13 +53,15 @@ jobs:
         with:
           node-version: 20
 
-      - name: Cache ~/.npm
+      - name: Cache bun + node_modules
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            npm-${{ runner.os }}-
+            bun-${{ runner.os }}-
 
       - name: Configure dual-registry auth
         # Trim trailing whitespace from tokens — see deploy-reusable
@@ -87,10 +93,17 @@ jobs:
           NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-        run: npm install --no-audit --ignore-scripts
+        # `bun install` honors `workspaces` in package.json natively —
+        # no `--workspaces` flag like npm. `--ignore-scripts` suppresses
+        # postinstall/prepare so dist-only packages don't build before
+        # devDeps are linked; explicit build step runs them next.
+        run: bun install --ignore-scripts
 
       - name: Build workspace packages
-        run: npm run build --workspaces --if-present 2>&1 | tail -100 || true
+        # `bun run --filter '*' build` runs the `build` script in every
+        # workspace package that declares one (matches the npm
+        # `--workspaces --if-present` semantics).
+        run: bun run --filter '*' build 2>&1 | tail -100 || true
 
       - name: Run tests
         env:
@@ -103,7 +116,7 @@ jobs:
           if [ -f "scripts/test.sh" ]; then
             bash scripts/test.sh
           elif jq -e '.scripts.test' package.json > /dev/null; then
-            npm test
+            bun run test
           else
             echo "No tests configured."
           fi
