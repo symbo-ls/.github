@@ -101,10 +101,19 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Configure dual-registry auth
+        # Trim trailing whitespace from each token before writing
+        # .npmrc — GitHub secrets are stored as raw bytes, and if the
+        # secret was pasted with a trailing newline (common bug) the
+        # embedded \n in `_authToken=$NPM_TOKEN` corrupts the auth
+        # header: npm sends `Authorization: Bearer <token>\n`, the
+        # registry rejects it as anonymous, and a request for a
+        # restricted package returns 404 ('not in this registry').
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          _RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          _RAW_GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: |
+          NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
+          GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
           NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           {
             [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
