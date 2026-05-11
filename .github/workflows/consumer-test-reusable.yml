@@ -67,11 +67,18 @@ jobs:
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
           GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
-          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          {
-            [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
-            [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
-          } >> "$NPMRC"
+          # Write to both: NPM_CONFIG_USERCONFIG (npm reads) + workspace
+          # root .npmrc (bun reads from cwd up; doesn't honor
+          # NPM_CONFIG_USERCONFIG). See deploy-reusable for the diagnosis.
+          write_npmrc() {
+            local target="$1"
+            {
+              [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
+              [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
+            } >> "$target"
+          }
+          write_npmrc "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          write_npmrc "$GITHUB_WORKSPACE/.npmrc"
 
       - name: Install (pulls newly published upstream versions)
         env:

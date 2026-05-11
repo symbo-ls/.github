@@ -108,24 +108,41 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Configure dual-registry auth
-        # Trim trailing whitespace from each token before writing
-        # .npmrc — GitHub secrets are stored as raw bytes, and if the
-        # secret was pasted with a trailing newline (common bug) the
-        # embedded \n in `_authToken=$NPM_TOKEN` corrupts the auth
-        # header: npm sends `Authorization: Bearer <token>\n`, the
-        # registry rejects it as anonymous, and a request for a
-        # restricted package returns 404 ('not in this registry').
+        # Two things to get right here:
+        #
+        # 1. Trim trailing whitespace from each token. GitHub secrets are
+        #    stored as raw bytes; if pasted with a trailing newline the
+        #    embedded \n in `_authToken=$NPM_TOKEN` corrupts the auth
+        #    header. The registry treats the request as anonymous and
+        #    returns 404 for restricted packages.
+        #
+        # 2. Write .npmrc to BOTH locations:
+        #    - $NPM_CONFIG_USERCONFIG (set by setup-node) — npm reads this
+        #    - ./.npmrc in the workspace root — bun reads from cwd up the
+        #      filesystem, and DOES NOT honor NPM_CONFIG_USERCONFIG (last
+        #      verified bun 1.3). So a workflow that uses `bun install`
+        #      without a sibling .npmrc gets anonymous auth and 404s on
+        #      every restricted @symbo.ls/* package.
+        #    workspace happens to ship a (gitignored) package-lock.json,
+        #    so its install path goes through npm and works. sdk has no
+        #    lock — falls through to `bun install --no-save` — and used
+        #    to fail mysteriously. Writing to both paths fixes it for
+        #    every consumer.
         env:
           _RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           _RAW_GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
           GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
-          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          {
-            [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
-            [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
-          } >> "$NPMRC"
+          write_npmrc() {
+            local target="$1"
+            {
+              [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
+              [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
+            } >> "$target"
+          }
+          write_npmrc "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          write_npmrc "$GITHUB_WORKSPACE/.npmrc"
 
       - name: Install
         env:
