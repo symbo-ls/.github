@@ -83,6 +83,20 @@ jobs:
               [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
             } >> "$target"
           }
+          if [ -z "$NPM_TOKEN" ]; then
+            # Fail fast with an actionable pointer instead of letting
+            # bun install 404 on every restricted package (looks like a
+            # network outage rather than a missing secret).
+            if [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ]; then
+              echo "::error::NPM_TOKEN is empty on a Dependabot-triggered run."
+              echo "::error::Dependabot uses its own secrets namespace. Add NPM_TOKEN at:"
+              echo "::error::  https://github.com/organizations/symbo-ls/settings/secrets/dependabot"
+            else
+              echo "::error::NPM_TOKEN is empty. Set the org-level Actions secret at:"
+              echo "::error::  https://github.com/organizations/symbo-ls/settings/secrets/actions"
+            fi
+            exit 1
+          fi
           write_npmrc "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           write_npmrc "$GITHUB_WORKSPACE/.npmrc"
 

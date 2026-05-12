@@ -112,7 +112,21 @@ jobs:
             } >> "$target"
           }
           if [ -z "$NPM_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN not set — install of restricted @symbo.ls/* packages will 404."
+            # Fail fast with an actionable pointer. The previous behavior
+            # (warn-and-continue) made the install step 404 on every
+            # restricted @symbo.ls/* package, which looks like a network
+            # outage rather than a missing secret — burns 20+ min of
+            # debugging per occurrence.
+            if [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ]; then
+              echo "::error::NPM_TOKEN is empty on a Dependabot-triggered run."
+              echo "::error::Dependabot has its own secrets namespace (separate from Actions secrets) since Sept 2021."
+              echo "::error::Add NPM_TOKEN (and GH_PACKAGES_TOKEN) at https://github.com/organizations/symbo-ls/settings/secrets/dependabot"
+            else
+              echo "::error::NPM_TOKEN is empty. Configure the org-level Actions secret:"
+              echo "::error::  https://github.com/organizations/symbo-ls/settings/secrets/actions"
+              echo "::error::(Use the granular access token with read on @symbo.ls/* on npmjs.org.)"
+            fi
+            exit 1
           fi
           write_npmrc "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           write_npmrc "$GITHUB_WORKSPACE/.npmrc"
