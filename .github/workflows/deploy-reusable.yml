@@ -30,6 +30,10 @@ on:
         required: false
       GH_PACKAGES_TOKEN:
         required: false
+      IDENTITY_PROVIDER:
+        required: false
+      SA_NAME:
+        required: false
 
 jobs:
   deploy:
@@ -37,6 +41,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      id-token: write
     steps:
       - name: Log dispatch source
         run: |
@@ -107,6 +112,64 @@ jobs:
             bun-${{ runner.os }}-${{ inputs.version }}-
             bun-${{ runner.os }}-
 
+      # Fetch NPM_TOKEN from Infisical critical (canonical source) when
+      # the consumer provided WIF inputs; fall back to the repo-level
+      # `secrets.NPM_TOKEN` otherwise so consumers without GCP/Infisical
+      # setup keep working unchanged. Same Path B pattern the server
+      # repo uses for deploy-cloudflare-packages / post-deploy / dev /
+      # migrate. Repo-level NPM_TOKEN secrets drift on rotation and
+      # silently 404 on restricted @symbo.ls/* deps — Infisical is the
+      # one source that stays correct.
+      - name: Authenticate to Google Cloud via WIF (for NPM_TOKEN)
+        id: gcp-auth
+        if: secrets.IDENTITY_PROVIDER != '' && secrets.SA_NAME != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.SA_NAME }}
+
+      - name: Set up gcloud (for Infisical bootstrap)
+        if: steps.gcp-auth.outcome == 'success'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Infisical CLI (for NPM_TOKEN)
+        if: steps.gcp-auth.outcome == 'success'
+        run: |
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo bash
+          sudo apt-get install -y infisical
+
+      - name: Fetch NPM_TOKEN from Infisical critical project
+        id: infisical-npm-token
+        if: steps.gcp-auth.outcome == 'success'
+        env:
+          TARGET_ENV: ${{ inputs.target_env }}
+        run: |
+          # Map deploy target_env to Infisical critical env slug.
+          # development/dev are equivalent here; production maps to prod.
+          case "$TARGET_ENV" in
+            development|dev) CRIT_ENV=dev ;;
+            production|prod) CRIT_ENV=prod ;;
+            *)               CRIT_ENV="$TARGET_ENV" ;;
+          esac
+          INF_DOMAIN=$(gcloud secrets versions access latest --secret=infisical_domain --project=symbols-main)
+          INF_CID=$(gcloud secrets versions access latest --secret=infisical_machine_client_id_${TARGET_ENV} --project=symbols-main 2>/dev/null || \
+                    gcloud secrets versions access latest --secret=infisical_machine_client_id_development --project=symbols-main)
+          INF_CSEC=$(gcloud secrets versions access latest --secret=infisical_client_secret_${TARGET_ENV} --project=symbols-main 2>/dev/null || \
+                     gcloud secrets versions access latest --secret=infisical_client_secret_development --project=symbols-main)
+          INF_TOKEN=$(infisical login --method=universal-auth \
+            --client-id="$INF_CID" --client-secret="$INF_CSEC" \
+            --domain="$INF_DOMAIN" --plain --silent)
+          INF_CRIT=ba3c1190-2fb7-4615-8a27-6a19f20825d5
+          NPM_TOKEN=$(infisical secrets get NPM_TOKEN \
+            --domain="$INF_DOMAIN" --projectId="$INF_CRIT" --env="$CRIT_ENV" \
+            --token="$INF_TOKEN" --plain --silent)
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN missing in Infisical critical/$CRIT_ENV"
+            exit 1
+          fi
+          echo "::add-mask::$NPM_TOKEN"
+          echo "token=$NPM_TOKEN" >> "$GITHUB_OUTPUT"
+
       - name: Configure dual-registry auth
         # Two things to get right here:
         #
@@ -129,7 +192,7 @@ jobs:
         #    to fail mysteriously. Writing to both paths fixes it for
         #    every consumer.
         env:
-          _RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          _RAW_NPM_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
           _RAW_GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
@@ -146,9 +209,9 @@ jobs:
 
       - name: Install
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
+          NPM_SECRET: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN_NPM: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: |
