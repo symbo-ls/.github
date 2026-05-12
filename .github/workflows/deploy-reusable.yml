@@ -42,6 +42,12 @@ jobs:
       contents: read
       packages: read
       id-token: write
+    # GitHub's expression parser doesn't allow `secrets` context in
+    # step-level `if:` conditions. Pull the existence check up to job
+    # env (secrets ARE allowed at that layer) and gate the WIF chain
+    # on `env.HAS_WIF` below.
+    env:
+      HAS_WIF: ${{ (secrets.IDENTITY_PROVIDER != '' && secrets.SA_NAME != '') && 'true' || 'false' }}
     steps:
       - name: Log dispatch source
         run: |
@@ -122,7 +128,7 @@ jobs:
       # one source that stays correct.
       - name: Authenticate to Google Cloud via WIF (for NPM_TOKEN)
         id: gcp-auth
-        if: secrets.IDENTITY_PROVIDER != '' && secrets.SA_NAME != ''
+        if: env.HAS_WIF == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.IDENTITY_PROVIDER }}
