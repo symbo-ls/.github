@@ -227,8 +227,20 @@ jobs:
           # Match test-reusable.yml: npm install with package-lock.json
           # uses lock-pinned tarball URLs and skips scope-metadata lookups
           # that bun's resolver hits (and 404s on restricted @symbo.ls/*).
+          #
+          # NOTE: do NOT pass --ignore-scripts here. Unlike test-reusable
+          # (which builds workspace packages explicitly and doesn't need
+          # third-party postinstall scripts), this deploy path runs
+          # `wrangler deploy` which dynamically requires the right
+          # platform-native workerd binary (@cloudflare/workerd-linux-64
+          # for the GitHub runner). Wrangler 4.x relies on its postinstall
+          # to pick / wire the correct optional dep into place; suppressing
+          # postinstalls leaves wrangler unable to load workerd:
+          #   Error: The package "@cloudflare/workerd-linux-64" could not
+          #   be found, and is needed by workerd.
+          # See run 25883192855 for the failure signature.
           if [ -f package-lock.json ]; then
-            npm install --no-audit --ignore-scripts
+            npm install --no-audit
           else
             bun install --no-save
           fi
