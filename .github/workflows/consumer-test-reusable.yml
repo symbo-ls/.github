@@ -53,15 +53,18 @@ jobs:
         with:
           node-version: 20
 
-      - name: Cache bun + node_modules
+      # Cache bun's tarball store only — see test-reusable.yml for the
+      # full rationale (TL;DR: caching node_modules across runs prevents
+      # upstream-release-triggered version bumps from being picked up;
+      # consumer-tests are literally about catching those, so the cache
+      # poisoning is even worse here than in test-reusable).
+      - name: Cache bun tarball store
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            bun-${{ runner.os }}-
+            bun-store-${{ runner.os }}-
 
       - name: Configure dual-registry auth
         # Trim trailing whitespace from tokens — see deploy-reusable

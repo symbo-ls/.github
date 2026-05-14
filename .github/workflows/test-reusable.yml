@@ -68,18 +68,30 @@ jobs:
         with:
           node-version: 20
 
-      # Cache bun's global install cache + repo node_modules. Bun keys
-      # its store by package@version, so a cold cache after a release
-      # only re-downloads the new tarballs.
-      - name: Cache bun + node_modules
+      # Cache bun's global tarball store only — NOT node_modules.
+      #
+      # Caching node_modules across runs poisons consumer CI after an
+      # upstream release: when an `^X.Y.Z` constraint is already satisfied
+      # by the restored node_modules tree, bun skips re-resolving and the
+      # new published version (e.g. a freshly-added export) never lands.
+      # That manifests as
+      #   SyntaxError: The requested module '@symbo.ls/<foo>' does not
+      #   provide an export named 'newExport'
+      # roughly an hour after the upstream publish, on every consumer
+      # whose package.json hasn't changed (hashFiles key reused).
+      #
+      # The tarball cache is safe to share — bun keys it by package@version,
+      # not by constraint, so a new version after a release is a cache miss
+      # for that one tarball. Relinking node_modules from local tarballs is
+      # fast (~5-15s) so dropping the node_modules cache is a small cost
+      # for a correctness win.
+      - name: Cache bun tarball store
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: bun-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            bun-${{ runner.os }}-
+            bun-store-${{ runner.os }}-
 
       - name: Configure dual-registry auth
         # Trim trailing whitespace from tokens before writing .npmrc.
