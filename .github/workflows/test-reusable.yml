@@ -144,7 +144,33 @@ jobs:
         # postinstall/prepare hooks so dist-only packages don't try to
         # build before their devDeps are linked; we run them explicitly
         # in the next step.
-        run: bun install --ignore-scripts
+        #
+        # Retry on npm propagation race: release-manager publishes
+        # packages and pushes consumer chore(release) bumps in lockstep,
+        # but npm has multiple read replicas with eventual consistency.
+        # An install that hits an un-synced replica fails with
+        #   error: No version matching "^X.Y.Z" found for specifier "@symbo.ls/*"
+        # The retry waits with linear backoff (15s, 30s, 45s, 60s) on
+        # this specific signature only — other errors fail fast.
+        run: |
+          LOG=$(mktemp)
+          MAX_ATTEMPTS=5
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            if bun install --ignore-scripts 2>&1 | tee "$LOG"; then
+              exit 0
+            fi
+            if ! grep -qE "(No version matching|ETARGET|failed to resolve)" "$LOG"; then
+              echo "::error::bun install failed (not a propagation race) — failing fast"
+              exit 1
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              wait=$((15 * attempt))
+              echo "::warning::npm propagation race detected (attempt $attempt/$MAX_ATTEMPTS), sleeping ${wait}s before retry"
+              sleep "$wait"
+            fi
+          done
+          echo "::error::bun install failed after $MAX_ATTEMPTS attempts — npm propagation did not catch up"
+          exit 1
 
       # Some workspace packages ship dist-only and need an explicit
       # build because --ignore-scripts above suppressed prepare hooks.

@@ -111,7 +111,30 @@ jobs:
         # no `--workspaces` flag like npm. `--ignore-scripts` suppresses
         # postinstall/prepare so dist-only packages don't build before
         # devDeps are linked; explicit build step runs them next.
-        run: bun install --ignore-scripts
+        #
+        # Retry on npm propagation race: consumer-test runs precisely
+        # when upstream just published, so the race window is tightest
+        # here. Linear backoff (15s/30s/45s/60s) on the propagation-race
+        # signature only — other errors fail fast.
+        run: |
+          LOG=$(mktemp)
+          MAX_ATTEMPTS=5
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            if bun install --ignore-scripts 2>&1 | tee "$LOG"; then
+              exit 0
+            fi
+            if ! grep -qE "(No version matching|ETARGET|failed to resolve)" "$LOG"; then
+              echo "::error::bun install failed (not a propagation race) — failing fast"
+              exit 1
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              wait=$((15 * attempt))
+              echo "::warning::npm propagation race detected (attempt $attempt/$MAX_ATTEMPTS), sleeping ${wait}s before retry"
+              sleep "$wait"
+            fi
+          done
+          echo "::error::bun install failed after $MAX_ATTEMPTS attempts — npm propagation did not catch up"
+          exit 1
 
       - name: Build workspace packages
         # `bun run --filter '*' build` runs the `build` script in every
