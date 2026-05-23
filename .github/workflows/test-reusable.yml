@@ -62,6 +62,13 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+          # `bun-version: latest` makes setup-bun call the
+          # oven-sh/bun GitHub API to resolve the latest tag.
+          # Anonymous calls share the runner-IP rate limit pool and
+          # 401 when exhausted (saw across workspace Test runs incl.
+          # 26337932317 + dev/preview runs). Passing GITHUB_TOKEN
+          # switches to the per-job authenticated quota (1000/hr).
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4

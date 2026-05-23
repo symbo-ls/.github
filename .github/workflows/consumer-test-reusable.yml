@@ -47,6 +47,10 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+          # Authenticated GH API lookup for `bun-version: latest` —
+          # avoids 401 on rate-limit exhaustion. See test-reusable.yml
+          # for full rationale.
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
