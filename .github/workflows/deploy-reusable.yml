@@ -96,7 +96,7 @@ jobs:
           # Wrangler 4.x requires Node.js >= 22. Bumping from 20 keeps
           # `wrangler deploy` working across every worker; npm 10 (bundled
           # with Node 22) handles server's package-lock.json install fine.
-          node-version: '22'
+          node-version: '24'
           # NO `registry-url` here. setup-node@v4 with registry-url writes
           # an .npmrc that includes `_authToken=${NODE_AUTH_TOKEN}` — an
           # env-var template that npm expands at install time. We don't
