@@ -73,7 +73,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       # Cache bun's global install cache + repo node_modules. Bun keys
       # its store by package@version, so a cold cache after a release
