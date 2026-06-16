@@ -148,8 +148,23 @@ jobs:
       - name: Install Infisical CLI (for NPM_TOKEN)
         if: steps.gcp-auth.outcome == 'success'
         run: |
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo bash
-          sudo apt-get install -y infisical
+          # Install the CLI from the GitHub release (github.com/Infisical/cli)
+          # rather than Infisical's Cloudsmith apt mirror
+          # (artifacts-cli.infisical.com). That mirror periodically serves a
+          # corrupt Packages index mid-sync ("File has unexpected size … Mirror
+          # sync in progress?"), hard-failing every deploy. The GitHub release
+          # CDN is independent of it; apt remains as a fallback.
+          INF_VER=0.43.79
+          if curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+               "https://github.com/Infisical/cli/releases/download/v${INF_VER}/cli_${INF_VER}_linux_amd64.tar.gz" -o /tmp/infisical.tgz; then
+            sudo tar -xzf /tmp/infisical.tgz -C /usr/local/bin infisical
+            sudo chmod +x /usr/local/bin/infisical
+          else
+            echo "::warning::GitHub release download failed — falling back to Infisical apt repo."
+            curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo bash
+            sudo apt-get install -y "infisical=${INF_VER}"
+          fi
+          infisical --version
 
       - name: Fetch NPM_TOKEN from Infisical critical project
         id: infisical-npm-token
