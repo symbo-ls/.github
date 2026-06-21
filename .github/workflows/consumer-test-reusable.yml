@@ -58,7 +58,7 @@ jobs:
           node-version: 20
 
       - name: Cache bun + node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.bun/install/cache
