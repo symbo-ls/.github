@@ -91,7 +91,7 @@ jobs:
         if: steps.resolve_ref.outputs.tag_exists != 'true'
         run: echo "::warning::Tag v${{ inputs.version }} not found on ${{ github.repository }}; deploying from main HEAD (target_env=${{ inputs.target_env }})."
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           # Wrangler 4.x requires Node.js >= 22. Bumping from 20 keeps
           # `wrangler deploy` working across every worker; npm 10 (bundled
