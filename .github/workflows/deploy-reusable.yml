@@ -28,7 +28,7 @@ on:
     secrets:
       NPM_TOKEN:
         required: false
-      GH_PACKAGES_TOKEN:
+      RELEASE_PAT:
         required: false
       IDENTITY_PROVIDER:
         required: false

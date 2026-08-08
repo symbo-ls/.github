@@ -34,8 +34,11 @@ on:
       # Static, read-only on @symbo.ls. Set per consumer repo.
       NPM_TOKEN:
         required: false
-      # Static, Classic PAT read:packages only on @symbo-ls. Per consumer.
-      GH_PACKAGES_TOKEN:
+      # The org.s single GitHub PAT. RELEASE_PAT is the ONLY name for it since
+      # 2026-08-08 (it replaced GH_PACKAGES_TOKEN, RELEASE_MANAGER_PAT,
+      # RELEASE_MANAGER_DISPATCH_TOKEN and GITHUB_PACKAGES_TOKEN, whose repo-
+      # level copies are deleted). Needs read:packages on @symbo-ls.
+      RELEASE_PAT:
         required: false
       # Optional: only sdk uses these (live API smoke tests). Most repos
       # leave them unset and the test step is a no-op for that branch.
