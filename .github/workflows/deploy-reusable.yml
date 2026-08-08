@@ -221,7 +221,7 @@ jobs:
         #    every consumer.
         env:
           _RAW_NPM_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
-          _RAW_GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          _RAW_GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GH_PACKAGES_TOKEN }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
           GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
@@ -240,8 +240,8 @@ jobs:
           NPM_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
           NPM_SECRET: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN_NPM: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GH_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GH_PACKAGES_TOKEN }}
         run: |
           # Match test-reusable.yml: npm install with package-lock.json
           # uses lock-pinned tarball URLs and skips scope-metadata lookups

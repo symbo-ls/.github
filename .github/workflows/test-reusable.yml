@@ -97,7 +97,7 @@ jobs:
         # @symbo.ls/* packages.
         env:
           _RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          _RAW_GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          _RAW_GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GH_PACKAGES_TOKEN }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
           GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
@@ -153,8 +153,8 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_SECRET: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GH_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GH_PACKAGES_TOKEN }}
         # `bun install` honors `workspaces` in package.json natively —
         # no `--workspaces` flag like npm. `--ignore-scripts` suppresses
         # postinstall/prepare hooks so dist-only packages don't try to
