@@ -144,7 +144,14 @@ jobs:
         # `bun run --filter '*' build` runs the `build` script in every
         # workspace package that declares one (matches the npm
         # `--workspaces --if-present` semantics).
-        run: bun run --filter '*' build 2>&1 | tail -100 || true
+        #
+        # A build failure MUST fail the job — see the matching comment in
+        # test-reusable.yml. `|| true` swallowed it outright, and `cmd |
+        # tail` returns *tail's* status, so the pipe alone would still mask
+        # it; `shell: bash` supplies `-eo pipefail` (the default
+        # `bash -e {0}` has no pipefail) so the build's status is what counts.
+        shell: bash
+        run: bun run --filter '*' build 2>&1 | tail -100
 
       - name: Run tests
         env:
