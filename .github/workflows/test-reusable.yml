@@ -196,8 +196,17 @@ jobs:
       # `bun run --filter '*' build` runs the `build` script in every
       # workspace package that declares one (matches the npm
       # `--workspaces --if-present` semantics).
+      # A build failure MUST fail the job. Two things previously stopped
+      # that from happening, and both had to go:
+      #   1. `|| true` swallowed the exit code outright.
+      #   2. even without it, `cmd | tail` returns *tail's* status, so the
+      #      pipe alone was enough to mask a failure. `shell: bash` gives
+      #      `-eo pipefail` (the default `bash -e {0}` has no pipefail),
+      #      which makes the pipeline report the build's status instead.
+      # Output is still capped at the last 100 lines to keep logs readable.
       - name: Build workspace packages
-        run: bun run --filter '*' build 2>&1 | tail -100 || true
+        shell: bash
+        run: bun run --filter '*' build 2>&1 | tail -100
 
       - name: Test
         env:
