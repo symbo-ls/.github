@@ -28,6 +28,11 @@ on:
     secrets:
       NPM_TOKEN:
         required: false
+      # Kept declared for caller compatibility (wrappers may pass it
+      # explicitly). NOT consumed at install time anymore: GitHub
+      # Packages was retired on 2026-08-25 — @symbo.ls/* and the
+      # npm:@symbo.ls/internal-* aliases all resolve from
+      # registry.npmjs.org with NPM_TOKEN.
       RELEASE_PAT:
         required: false
       IDENTITY_PROVIDER:
@@ -40,7 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
       id-token: write
     # GitHub's expression parser doesn't allow `secrets` context in
     # step-level `if:` conditions. Pull the existence check up to job
@@ -198,10 +202,10 @@ jobs:
           echo "::add-mask::$NPM_TOKEN"
           echo "token=$NPM_TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Configure dual-registry auth
+      - name: Configure npm registry auth
         # Two things to get right here:
         #
-        # 1. Trim trailing whitespace from each token. GitHub secrets are
+        # 1. Trim trailing whitespace from the token. GitHub secrets are
         #    stored as raw bytes; if pasted with a trailing newline the
         #    embedded \n in `_authToken=$NPM_TOKEN` corrupts the auth
         #    header. The registry treats the request as anonymous and
@@ -219,17 +223,24 @@ jobs:
         #    lock — falls through to `bun install --no-save` — and used
         #    to fail mysteriously. Writing to both paths fixes it for
         #    every consumer.
+        #
+        # npmjs is the ONLY registry: GitHub Packages was retired on
+        # 2026-08-25. @symbo.ls/* and the npm:@symbo.ls/internal-*
+        # aliases (the former @symbo-ls/* GH-Packages scope) all resolve
+        # from registry.npmjs.org. Never re-add an
+        # `@symbo-ls:registry=https://npm.pkg.github.com` route: GH
+        # Packages transfer is metered on the org spending block, so
+        # every tarball download 403s the moment the org hits its
+        # billing limit — metadata still answers 200, which makes it
+        # read like a token-scope problem. Measured 2026-08-28.
         env:
           _RAW_NPM_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
-          _RAW_GH_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
-          GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
           write_npmrc() {
             local target="$1"
             {
               [ -n "$NPM_TOKEN" ] && echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" && echo "always-auth=true"
-              [ -n "$GH_TOKEN" ] && echo "@symbo-ls:registry=https://npm.pkg.github.com" && echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
             } >> "$target"
           }
           write_npmrc "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
@@ -240,8 +251,7 @@ jobs:
           NPM_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
           NPM_SECRET: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN_NPM: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.RELEASE_PAT }}
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          NODE_AUTH_TOKEN: ${{ steps.infisical-npm-token.outputs.token || secrets.NPM_TOKEN }}
         run: |
           # Match test-reusable.yml: npm install with package-lock.json
           # uses lock-pinned tarball URLs and skips scope-metadata lookups

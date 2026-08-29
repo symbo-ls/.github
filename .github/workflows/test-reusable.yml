@@ -34,10 +34,14 @@ on:
       # Static, read-only on @symbo.ls. Set per consumer repo.
       NPM_TOKEN:
         required: false
-      # The org.s single GitHub PAT. RELEASE_PAT is the ONLY name for it since
+      # The org's single GitHub PAT. RELEASE_PAT is the ONLY name for it since
       # 2026-08-08 (it replaced GH_PACKAGES_TOKEN, RELEASE_MANAGER_PAT,
       # RELEASE_MANAGER_DISPATCH_TOKEN and GITHUB_PACKAGES_TOKEN, whose repo-
-      # level copies are deleted). Needs read:packages on @symbo-ls.
+      # level copies are deleted). Kept declared for caller compatibility;
+      # NOT consumed here anymore — GitHub Packages was retired on
+      # 2026-08-25, and every package (incl. the npm:@symbo.ls/internal-*
+      # aliases for the former @symbo-ls/* scope) resolves from
+      # registry.npmjs.org with NPM_TOKEN.
       RELEASE_PAT:
         required: false
       # Optional: only sdk uses these (live API smoke tests). Most repos
@@ -91,19 +95,23 @@ jobs:
           restore-keys: |
             bun-${{ runner.os }}-
 
-      - name: Configure dual-registry auth
-        # Trim trailing whitespace from tokens before writing .npmrc.
+      - name: Configure npm registry auth
+        # Trim trailing whitespace from the token before writing .npmrc.
         # GitHub secrets are stored as raw bytes — a trailing newline
         # in the secret value embeds \n in the _authToken= line, which
         # corrupts the Authorization header npm sends. The registry
         # then treats the request as anonymous and 404s on restricted
         # @symbo.ls/* packages.
+        #
+        # npmjs is the ONLY registry: GitHub Packages was retired on
+        # 2026-08-25. Never re-add an @symbo-ls:registry route to
+        # npm.pkg.github.com — its transfer is metered on the org
+        # spending block and 403s on every tarball once the billing
+        # limit is hit (metadata still 200s). See deploy-reusable.yml.
         env:
           _RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          _RAW_GH_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
-          GH_TOKEN=$(printf '%s' "$_RAW_GH_TOKEN" | tr -d '\n\r ')
           # Write to both the user-config path AND the workspace-root
           # .npmrc — bun reads from cwd upward and does NOT honor
           # NPM_CONFIG_USERCONFIG (npm-only env var). See
@@ -114,10 +122,6 @@ jobs:
               if [ -n "$NPM_TOKEN" ]; then
                 echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN"
                 echo "always-auth=true"
-              fi
-              if [ -n "$GH_TOKEN" ]; then
-                echo "@symbo-ls:registry=https://npm.pkg.github.com"
-                echo "//npm.pkg.github.com/:_authToken=$GH_TOKEN"
               fi
             } >> "$target"
           }
@@ -156,8 +160,7 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_SECRET: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.RELEASE_PAT }}
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         # `bun install` honors `workspaces` in package.json natively —
         # no `--workspaces` flag like npm. `--ignore-scripts` suppresses
         # postinstall/prepare hooks so dist-only packages don't try to
