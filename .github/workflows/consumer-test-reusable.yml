@@ -22,10 +22,12 @@ on:
         type: string
         required: false
         default: 'a95028f1-c89b-4d5e-87a2-d6badfb3ab4b'
+      # `production` matches the env release-manager's release.yml reads
+      # this key from with a working identity (roles are env-scoped).
       infisical_npm_env:
         type: string
         required: false
-        default: 'staging'
+        default: 'production'
       infisical_npm_key:
         type: string
         required: false
@@ -211,6 +213,10 @@ jobs:
           write_npmrc "$GITHUB_WORKSPACE/.npmrc"
 
       - name: Install (pulls newly published upstream versions)
+        # `shell: bash` gives `-eo pipefail`; without it `bun install | tee`
+        # returns tee's status and a failed install reports green. See the
+        # Install step in test-reusable.yml (measured on sdk run 34691267427).
+        shell: bash
         env:
           # Must agree with the .npmrc written above, or a project-local
           # .npmrc re-authenticates the install with the weaker token.

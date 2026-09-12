@@ -39,10 +39,13 @@ on:
         type: string
         required: false
         default: 'a95028f1-c89b-4d5e-87a2-d6badfb3ab4b'
+      # `production` is the env release-manager's release.yml reads this
+      # key from today, with a working identity. Infisical scopes an
+      # identity's project role per environment, so match the proven one.
       infisical_npm_env:
         type: string
         required: false
-        default: 'staging'
+        default: 'production'
       infisical_npm_key:
         type: string
         required: false
@@ -280,6 +283,13 @@ jobs:
           write_npmrc "$GITHUB_WORKSPACE/.npmrc"
 
       - name: Install
+        # `shell: bash` gives `-eo pipefail`. Without it, `bun install | tee`
+        # returns TEE's exit code, the `if` takes the success branch, and a
+        # failed install reports green — measured on sdk run 34691267427
+        # (2026-09-12): 404 on @symbo.ls/analyze, step status "success",
+        # then the build died on a missing bin. Same trap the Build step
+        # below already documents.
+        shell: bash
         env:
           # Aliases for repos with project-local .npmrc using these names.
           # Same precedence as the auth step: Infisical first, static
