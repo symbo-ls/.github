@@ -324,6 +324,14 @@ jobs:
             if $CMD 2>&1 | tee "$LOG"; then
               exit 0
             fi
+            # A 404 on a restricted @symbo.ls/* package is an AUTH verdict,
+            # never a propagation race — see test-reusable.yml. Both the bun
+            # (`GET …/@symbo.ls%2fx - 404`) and npm (`404 Not Found - GET
+            # …/@symbo.ls%2fx`) formats are matched.
+            if grep -qE "(registry\.npmjs\.org/@symbo\.ls%2f[^ ]* - 404|404 Not Found - GET https://registry\.npmjs\.org/@symbo\.ls%2f)" "$LOG"; then
+              echo "::error::install got 404 on a restricted @symbo.ls/* package — the install token has no read on the scope (or is empty). Check the 'Fetch NPM_TOKEN from Infisical critical project' step: if it warned and fell back to the read token, grant that machine identity read on NPM_TOKEN_PUBLISH in Infisical project a95028f1."
+              exit 1
+            fi
             if ! grep -qE "(No version matching|ETARGET|failed to resolve|notarget)" "$LOG"; then
               echo "::error::install failed (not a propagation race) — failing fast"
               exit 1

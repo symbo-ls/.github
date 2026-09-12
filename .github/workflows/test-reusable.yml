@@ -320,6 +320,15 @@ jobs:
             if bun install --ignore-scripts 2>&1 | tee "$LOG"; then
               exit 0
             fi
+            # A 404 on a restricted @symbo.ls/* package is an AUTH verdict
+            # (the registry hides restricted packages from a token without
+            # read on the scope), never a propagation race. Retrying it
+            # burned 2.5 min per run (sdk run 34691472701). Fail fast and
+            # name the cause.
+            if grep -qE "registry\.npmjs\.org/@symbo\.ls%2f[^ ]* - 404" "$LOG"; then
+              echo "::error::bun install got 404 on a restricted @symbo.ls/* package — the install token has no read on the scope (or is empty). Check the 'Resolve npm install token from Infisical' step above: if it fell back, grant the CI identity read on NPM_TOKEN_PUBLISH in Infisical."
+              exit 1
+            fi
             if ! grep -qE "(No version matching|ETARGET|failed to resolve)" "$LOG"; then
               echo "::error::bun install failed (not a propagation race) — failing fast"
               exit 1

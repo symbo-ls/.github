@@ -240,6 +240,12 @@ jobs:
             if bun install --ignore-scripts 2>&1 | tee "$LOG"; then
               exit 0
             fi
+            # A 404 on a restricted @symbo.ls/* package is an AUTH verdict,
+            # never a propagation race — see test-reusable.yml.
+            if grep -qE "registry\.npmjs\.org/@symbo\.ls%2f[^ ]* - 404" "$LOG"; then
+              echo "::error::bun install got 404 on a restricted @symbo.ls/* package — the install token has no read on the scope (or is empty). Check the 'Resolve npm install token from Infisical' step above: if it fell back, grant the CI identity read on NPM_TOKEN_PUBLISH in Infisical."
+              exit 1
+            fi
             if ! grep -qE "(No version matching|ETARGET|failed to resolve)" "$LOG"; then
               echo "::error::bun install failed (not a propagation race) — failing fast"
               exit 1
