@@ -31,7 +31,7 @@ on:
 
 jobs:
   consumer-test:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-smbls
     timeout-minutes: 20
     steps:
       - name: Echo dispatch payload
