@@ -110,9 +110,20 @@ jobs:
           # empty auth → 404 on every restricted @symbo.ls/* package.
           # The Configure step writes a complete .npmrc on its own. Trust it.
 
+      # Pin bun to the repo's declared `packageManager` (workspace pins
+      # bun@1.3.14). `latest` rewrites bun.lock to lockfile v3, which the
+      # pinned local toolchain cannot read. See test-reusable.yml.
+      - name: Resolve bun version from package.json
+        id: bunv
+        shell: bash
+        run: |
+          v=$(jq -r '.packageManager // "" | select(startswith("bun@")) | ltrimstr("bun@")' package.json 2>/dev/null || true)
+          echo "version=${v:-latest}" >> "$GITHUB_OUTPUT"
+          echo "bun version: ${v:-latest} (from package.json packageManager)"
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bunv.outputs.version }}
           # Authenticated GH API lookup for `bun-version: latest` —
           # avoids 401 on rate-limit exhaustion. See test-reusable.yml
           # for full rationale.
@@ -191,12 +202,36 @@ jobs:
           INF_TOKEN=$(infisical login --method=universal-auth \
             --client-id="$INF_CID" --client-secret="$INF_CSEC" \
             --domain="$INF_DOMAIN" --plain --silent)
-          INF_CRIT=ba3c1190-2fb7-4615-8a27-6a19f20825d5
-          NPM_TOKEN=$(infisical secrets get NPM_TOKEN \
-            --domain="$INF_DOMAIN" --projectId="$INF_CRIT" --env="$CRIT_ENV" \
-            --token="$INF_TOKEN" --plain --silent)
+          # Prefer the PUBLISH-scoped token for the install. The read-scoped
+          # NPM_TOKEN 404s on a COLD `bun install` of the restricted
+          # @symbo.ls/* family (measured 2026-09-10: 20 resolve failures)
+          # while the publish token resolves every package. A warm
+          # node_modules hides this until a dependency range moves.
+          # NPM_TOKEN_PUBLISH lives ONLY in project a95028f1 (envs
+          # `staging` and `production`, measured 2026-09-12); the critical
+          # project holds just NPM_TOKEN. Fall back to that read token when
+          # the publish one is out of reach for this env's machine identity
+          # (dev has none) so nothing regresses.
+          INF_PUB=a95028f1-c89b-4d5e-87a2-d6badfb3ab4b
+          case "$TARGET_ENV" in
+            production|prod) PUB_ENV=production ;;
+            staging)         PUB_ENV=staging ;;
+            *)               PUB_ENV=staging ;;
+          esac
+          NPM_TOKEN=$(infisical secrets get NPM_TOKEN_PUBLISH \
+            --domain="$INF_DOMAIN" --projectId="$INF_PUB" --env="$PUB_ENV" \
+            --token="$INF_TOKEN" --plain --silent 2>/dev/null | tr -d '\n\r ' || true)
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "Using NPM_TOKEN_PUBLISH from Infisical ($PUB_ENV) for the install token."
+          else
+            echo "::warning::NPM_TOKEN_PUBLISH not readable from Infisical ($PUB_ENV) — falling back to critical/$CRIT_ENV NPM_TOKEN (read scope; cold installs of restricted packages may 404)."
+            INF_CRIT=ba3c1190-2fb7-4615-8a27-6a19f20825d5
+            NPM_TOKEN=$(infisical secrets get NPM_TOKEN \
+              --domain="$INF_DOMAIN" --projectId="$INF_CRIT" --env="$CRIT_ENV" \
+              --token="$INF_TOKEN" --plain --silent)
+          fi
           if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN missing in Infisical critical/$CRIT_ENV"
+            echo "::error::No npm token readable from Infisical (publish $PUB_ENV, critical/$CRIT_ENV)"
             exit 1
           fi
           echo "::add-mask::$NPM_TOKEN"

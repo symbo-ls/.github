@@ -30,6 +30,23 @@ on:
         type: string
         required: false
         default: 'smoke'
+      # Where the npm INSTALL token lives in Infisical. Defaults match the
+      # org's layout as measured 2026-09-12: NPM_TOKEN_PUBLISH exists ONLY
+      # in project a95028f1 (envs `staging` and `production`); the critical
+      # project ba3c1190 holds just the read-scoped NPM_TOKEN. Overridable
+      # so a caller can point elsewhere without forking this workflow.
+      infisical_npm_project:
+        type: string
+        required: false
+        default: 'a95028f1-c89b-4d5e-87a2-d6badfb3ab4b'
+      infisical_npm_env:
+        type: string
+        required: false
+        default: 'staging'
+      infisical_npm_key:
+        type: string
+        required: false
+        default: 'NPM_TOKEN_PUBLISH'
     secrets:
       # Static, read-only on @symbo.ls. Set per consumer repo.
       NPM_TOKEN:
@@ -65,10 +82,24 @@ jobs:
         with:
           submodules: recursive
 
+      # Pin bun to the version the repo declares in package.json
+      # `packageManager` (workspace pins bun@1.3.14, sdk bun@1.3.6).
+      # `latest` is a live hazard: a newer bun rewrites bun.lock to
+      # lockfile v3, which the pinned local toolchain cannot read, and
+      # every plane (dev server, deploy, publish) then fails on the
+      # lockfile. Repos with no `packageManager` keep `latest`.
+      - name: Resolve bun version from package.json
+        id: bunv
+        shell: bash
+        run: |
+          v=$(jq -r '.packageManager // "" | select(startswith("bun@")) | ltrimstr("bun@")' package.json 2>/dev/null || true)
+          echo "version=${v:-latest}" >> "$GITHUB_OUTPUT"
+          echo "bun version: ${v:-latest} (from package.json packageManager)"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ steps.bunv.outputs.version }}
           # `bun-version: latest` makes setup-bun call the
           # oven-sh/bun GitHub API to resolve the latest tag.
           # Anonymous calls share the runner-IP rate limit pool and
@@ -95,6 +126,97 @@ jobs:
           restore-keys: |
             bun-${{ runner.os }}-
 
+      # Resolve the npm INSTALL token from Infisical.
+      #
+      # Why: `secrets.NPM_TOKEN` is a READ-scoped granular token, and a COLD
+      # `bun install` of the restricted @symbo.ls/* family 404s under it
+      # (measured 2026-09-10: 20 resolve failures, 9x404) while the publish
+      # token resolves every package with 0 failures. `npm view` succeeds
+      # under BOTH tokens, so npm is not a valid instrument for this — only
+      # a cold bun install reproduces it. A warm node_modules hides the
+      # defect until a dependency range actually moves.
+      #
+      # The tokens are held in Infisical, so CI reads the install token from
+      # there. That keeps ONE source of truth and makes rotation reach CI
+      # without a secret copy per repo.
+      #
+      # This step is OPTIONAL and fails SOFT. A caller without Infisical
+      # creds, or a login/fetch that fails, leaves NPM_INSTALL_TOKEN unset
+      # and the next step falls back to `secrets.NPM_TOKEN` exactly as
+      # before. Never let a secrets-backend outage turn into a red gate.
+      - name: Resolve npm install token from Infisical
+        shell: bash
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_DOMAIN: ${{ secrets.INFISICAL_DOMAIN }}
+          NPM_PROJECT: ${{ inputs.infisical_npm_project }}
+          NPM_ENV: ${{ inputs.infisical_npm_env }}
+          NPM_KEY: ${{ inputs.infisical_npm_key }}
+        run: |
+          if [ -z "${INFISICAL_CLIENT_ID:-}" ] || [ -z "${INFISICAL_CLIENT_SECRET:-}" ]; then
+            echo "::notice::Infisical not configured on this repo — using the static NPM_TOKEN secret."
+            exit 0
+          fi
+
+          if ! command -v infisical > /dev/null 2>&1; then
+            # Same recipe as deploy-reusable.yml: the GitHub release CDN,
+            # with the apt mirror only as a fallback (that mirror
+            # periodically serves a corrupt Packages index mid-sync).
+            INF_VER=0.43.79
+            if curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+                 "https://github.com/Infisical/cli/releases/download/v${INF_VER}/cli_${INF_VER}_linux_amd64.tar.gz" -o /tmp/infisical.tgz; then
+              sudo tar -xzf /tmp/infisical.tgz -C /usr/local/bin infisical
+              sudo chmod +x /usr/local/bin/infisical
+            else
+              echo "::warning::GitHub release download failed — falling back to Infisical apt repo."
+              curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo bash
+              sudo apt-get install -y "infisical=${INF_VER}"
+            fi
+          fi
+
+          # Universal-auth rejects payloads with newlines in the body
+          # fields, and a secret set with a trailing newline 401s as
+          # "Invalid credentials". Trim defensively.
+          CLEAN_CID=$(printf '%s' "$INFISICAL_CLIENT_ID" | tr -d '\n\r ')
+          CLEAN_CSEC=$(printf '%s' "$INFISICAL_CLIENT_SECRET" | tr -d '\n\r ')
+
+          set +e
+          INFISICAL_TOKEN=$(infisical login \
+            --method=universal-auth \
+            --client-id="$CLEAN_CID" \
+            --client-secret="$CLEAN_CSEC" \
+            --domain="$INFISICAL_DOMAIN" \
+            --plain --silent 2>/dev/null)
+          LOGIN_RC=$?
+          set -e
+
+          if [ $LOGIN_RC -ne 0 ] || [ -z "$INFISICAL_TOKEN" ]; then
+            echo "::warning::Infisical login failed — falling back to the static NPM_TOKEN secret."
+            exit 0
+          fi
+          export INFISICAL_TOKEN
+
+          set +e
+          RESOLVED=$(infisical secrets get "$NPM_KEY" \
+            --domain="$INFISICAL_DOMAIN" \
+            --projectId="$NPM_PROJECT" \
+            --env="$NPM_ENV" \
+            --token="$INFISICAL_TOKEN" \
+            --plain --silent 2>/dev/null | tr -d '\n\r ')
+          GET_RC=$?
+          set -e
+
+          if [ $GET_RC -ne 0 ] || [ -z "$RESOLVED" ]; then
+            echo "::warning::Could not read $NPM_KEY from Infisical ($NPM_ENV) — falling back to the static NPM_TOKEN secret."
+            exit 0
+          fi
+
+          # Mask BEFORE the value can reach any later log line.
+          echo "::add-mask::$RESOLVED"
+          echo "NPM_INSTALL_TOKEN=$RESOLVED" >> "$GITHUB_ENV"
+          echo "Using $NPM_KEY from Infisical ($NPM_ENV) for the install token."
+
       - name: Configure npm registry auth
         # Trim trailing whitespace from the token before writing .npmrc.
         # GitHub secrets are stored as raw bytes — a trailing newline
@@ -109,7 +231,10 @@ jobs:
         # spending block and 403s on every tarball once the billing
         # limit is hit (metadata still 200s). See deploy-reusable.yml.
         env:
-          _RAW_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # NPM_INSTALL_TOKEN comes from the Infisical step above when that
+          # repo has the creds. Otherwise it is empty and the static
+          # secret is used, which is the pre-2026-09-12 behaviour.
+          _RAW_NPM_TOKEN: ${{ env.NPM_INSTALL_TOKEN || secrets.NPM_TOKEN }}
         run: |
           NPM_TOKEN=$(printf '%s' "$_RAW_NPM_TOKEN" | tr -d '\n\r ')
           # Write to both the user-config path AND the workspace-root
@@ -157,10 +282,14 @@ jobs:
       - name: Install
         env:
           # Aliases for repos with project-local .npmrc using these names.
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN_NPM: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Same precedence as the auth step: Infisical first, static
+          # secret as the fallback. These MUST agree with the .npmrc the
+          # step above wrote, or a project-local .npmrc silently
+          # re-authenticates the install with the weaker token.
+          NPM_TOKEN: ${{ env.NPM_INSTALL_TOKEN || secrets.NPM_TOKEN }}
+          NPM_SECRET: ${{ env.NPM_INSTALL_TOKEN || secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN_NPM: ${{ env.NPM_INSTALL_TOKEN || secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ env.NPM_INSTALL_TOKEN || secrets.NPM_TOKEN }}
         # `bun install` honors `workspaces` in package.json natively —
         # no `--workspaces` flag like npm. `--ignore-scripts` suppresses
         # postinstall/prepare hooks so dist-only packages don't try to
